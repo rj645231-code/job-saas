@@ -5,15 +5,13 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, date
 from dotenv import load_dotenv
 import os
 from supabase import create_client
@@ -25,13 +23,9 @@ load_dotenv()
 # ==============================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
-# ==============================
-# CONNECT SUPABASE
-# ==============================
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==============================
@@ -39,10 +33,6 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ==============================
 TARGET_SKILLS = ["python","sql","power bi","excel","tableau","machine learning"]
 HISTORY_FILE = "seen_jobs.txt"
-
-MAX_SCROLL_ATTEMPTS = 80
-SCROLL_PAUSE = 4
-DETAIL_PAUSE = 2
 
 # ==============================
 # CHROME SETUP
@@ -56,21 +46,19 @@ options.add_argument("--window-size=1920,1080")
 driver = webdriver.Chrome(options=options)
 
 # ==============================
-# BUILD LINKEDIN URL
+# BUILD URL
 # ==============================
 def build_linkedin_url(keyword, location):
     return f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(keyword)}&location={quote_plus(location)}"
 
 # ==============================
-# SCROLL PAGE
+# SCROLL
 # ==============================
 def scroll_page():
     last_height = driver.execute_script("return document.body.scrollHeight")
-
-    for _ in range(MAX_SCROLL_ATTEMPTS):
+    for _ in range(50):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(SCROLL_PAUSE)
-
+        time.sleep(3)
         new_height = driver.execute_script("return document.body.scrollHeight")
         if new_height == last_height:
             break
@@ -82,11 +70,9 @@ def scroll_page():
 def fetch_job_details(job_url):
     try:
         driver.get(job_url)
-        time.sleep(DETAIL_PAUSE)
-
+        time.sleep(2)
         soup = BeautifulSoup(driver.page_source,"html.parser")
-        desc = soup.get_text(" ",strip=True).lower()
-        return desc
+        return soup.get_text(" ",strip=True).lower()
     except:
         return ""
 
@@ -96,7 +82,7 @@ def fetch_job_details(job_url):
 def send_email(receiver, jobs):
     if not jobs:
         print("No jobs for", receiver)
-        return
+        return False
 
     html = ""
     for job in jobs:
@@ -113,7 +99,6 @@ def send_email(receiver, jobs):
     msg['From'] = SENDER_EMAIL
     msg['To'] = receiver
     msg['Subject'] = f"🔥 {len(jobs)} New Jobs Found"
-
     msg.attach(MIMEText(html,"html"))
 
     try:
@@ -122,8 +107,10 @@ def send_email(receiver, jobs):
             server.login(SENDER_EMAIL,EMAIL_PASSWORD)
             server.send_message(msg)
         print("✅ Email sent:",receiver)
+        return True
     except Exception as e:
         print("Email error:",e)
+        return False
 
 # ==============================
 # LOAD HISTORY
@@ -135,7 +122,7 @@ else:
     seen_urls=set()
 
 # ==============================
-# 🚀 MAIN SYSTEM START
+# MAIN START
 # ==============================
 print("🚀 Smart Job SaaS Running...")
 
@@ -146,14 +133,27 @@ except Exception as e:
     driver.quit()
     exit()
 
+today = date.today()
+
 # ==============================
-# LOOP EACH USER
+# LOOP USERS
 # ==============================
 for user in users:
 
     email = user["email"]
     keyword = user["keywords"]
     location = user["location"]
+    last_sent = user.get("last_email_sent")
+
+    # 🛑 skip if already emailed today
+    if last_sent:
+        try:
+            last_sent_date = date.fromisoformat(last_sent)
+            if last_sent_date == today:
+                print(f"⛔ Already emailed today: {email}")
+                continue
+        except:
+            pass
 
     print(f"\n👤 User: {email}")
     print(f"🔍 Searching: {keyword} | {location}")
@@ -164,7 +164,6 @@ for user in users:
         url = build_linkedin_url(keyword,location)
         driver.get(url)
         time.sleep(5)
-
         scroll_page()
 
         soup = BeautifulSoup(driver.page_source,"html.parser")
@@ -176,22 +175,18 @@ for user in users:
             if not a_tag: continue
 
             job_url = a_tag["href"].split("?")[0]
-
             if job_url in seen_urls:
                 continue
 
             title = a_tag.text.strip()
-
             company = card.find("h4")
             company = company.text.strip() if company else ""
-
             loc = card.find("span",class_="job-search-card__location")
             loc = loc.text.strip() if loc else ""
 
             print("Checking:",title)
 
             desc = fetch_job_details(job_url)
-
             matched = [s for s in TARGET_SKILLS if s in desc]
 
             if matched:
@@ -210,8 +205,16 @@ for user in users:
     except Exception as e:
         print("Scraping error:",e)
 
-    # send email per user
-    send_email(email,user_jobs)
+    # ==========================
+    # SEND EMAIL + UPDATE DATE
+    # ==========================
+    sent = send_email(email,user_jobs)
+
+    if sent:
+        supabase.table("users").update({
+            "last_email_sent": str(today)
+        }).eq("email", email).execute()
+
     time.sleep(10)
 
 driver.quit()
