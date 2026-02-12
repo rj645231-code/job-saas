@@ -1,8 +1,6 @@
 name: Auto Job Bot
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -13,7 +11,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Python
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
@@ -29,3 +27,12 @@ jobs:
         SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       run: python main.py
+
+    - name: Wait 5 minutes
+      run: sleep 300
+
+    - name: Trigger again
+      uses: benc-uk/workflow-dispatch@v1
+      with:
+        workflow: run.yml
+        token: ${{ secrets.GITHUB_TOKEN }}
